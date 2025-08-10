@@ -1,0 +1,83 @@
+const Apify = require('apify');
+const { log } = Apify.utils;
+
+Apify.main(async () => {
+    const input = await Apify.getInput() || {};
+
+    // Predefined categories for scraping
+    const searchTerms = [
+        "hotel",
+        "resort",
+        "villa",
+        "casa",
+        "hotspring",
+        "private resort",
+        "beach resort",
+        "spa",
+        "inn",
+        "lodge",
+        "vacation rental",
+        "guesthouse",
+        "bed and breakfast",
+        "boutique hotel",
+        "mountain resort",
+        "eco resort"
+    ];
+
+    const location = input.location || "Philippines"; // You can change or pass dynamically
+    const maxResults = input.maxResults || 200;
+    const language = input.language || 'en';
+    const enrichContacts = input.enrichContacts ?? true;
+
+    // Step 1: Scrape Google Maps basic data
+    const googleMapsScraperRun = await Apify.call('poidata/google-maps-scraper', {
+        searchTerms,
+        location,
+        language,
+        maxResultsPerSearchTerm: maxResults,
+        includeContactDetails: false,
+    });
+
+    const datasetId = googleMapsScraperRun.defaultDatasetId;
+    log.info(`Maps scraped; dataset ID: ${datasetId}`);
+
+    // Step 2: Optionally enrich dataset with contact info
+    let finalDatasetId = datasetId;
+    if (enrichContacts) {
+        const enrichRun = await Apify.call('lukaskrivka/google-maps-with-contact-details', {
+            datasetId,
+        });
+        finalDatasetId = enrichRun.defaultDatasetId;
+        log.info(`Dataset enriched; new dataset ID: ${finalDatasetId}`);
+    }
+
+    // Step 3: Get and transform the data
+    const { items } = await Apify.client.datasets.getItems({
+        datasetId: finalDatasetId,
+        clean: true,
+        format: 'json',
+    });
+
+    // Step 4: Create clean output with separated contact details
+    const cleanedData = items.map(biz => ({
+        businessName: biz.title || biz.name || null,
+        category: biz.category || null,
+        address: biz.address || null,
+        city: biz.city || null,
+        region: biz.region || null,
+        country: biz.country || null,
+        latitude: biz.location?.lat || null,
+        longitude: biz.location?.lng || null,
+        rating: biz.rating || null,
+        reviewsCount: biz.reviewsCount || null,
+        phone: biz.phone || null,
+        email: biz.email || null,
+        website: biz.website || null,
+        placeId: biz.placeId || null,
+        googleMapsUrl: biz.url || null,
+        openingHours: biz.openingHours || null
+    }));
+
+    await Apify.setValue('OUTPUT', cleanedData);
+    log.info(`Scraping and enrichment completed. Total records: ${cleanedData.length}`);
+});
